@@ -1,33 +1,5 @@
 <?php
 
-/*
-How to use.
-
-cd laravel_folder
-php auto_mapping.php
-
-django folder should be like this.
-
-django folder ../python_program
-laravel folder ./
-
-ls
---------------
-django_program
-laravel_program
-cd laravel_program;php auto_mapping.php
-
-We assume folder architecture like below.
-
-django/module/templates/module/file.html
-django/module/static/module/file.js
-
-that files goes ..
-
-laravel/resources/views/module/file.blade.php
-laravel/public/static/module/file.js
-*/
-
 class django_to_laravel
 {
     public function __construct()
@@ -50,6 +22,16 @@ class django_to_laravel
         $this->controller_path = 'app/Http/Controllers';
         $this->all_module = [];
         $this->all_prefix = [];
+
+        $this->route_template = '';
+        $this->route_file = 'routes/manager.php';
+        $this->middleware_mapper = [];
+        $this->default_middleware = '->middleware(\'session.has.user\')';
+
+        $this->route_alias = [ ['index'=>'/'], ['_index'=>'/'], ['_update'=>'/update'] ];
+
+        $this->routine_mapper = array_reverse($this->routine_mapper);
+
     }
 
     public function run()
@@ -121,9 +103,23 @@ class django_to_laravel
             }
         EOF;
 
+        $route_template = <<<EOF
+<?php
+
+[Imports]
+use Illuminate\Support\Facades\Route;
+
+
+[Routers]
+
+EOF;
+
         $this->main_routine = $main_routine;
         $this->sub_routine = ['index' => $sub_routine_index, 'detail' => $sub_routine_detail];
+        $this->route_template = $route_template;
+
     }
+
 
     public function attach_rules()
     {
@@ -131,50 +127,49 @@ class django_to_laravel
         $rpl = <<<EOF
 @extends('layouts.\$1')
 EOF;
-
         $this->add_rule($re, $rpl);
 
-        $re = '/\{\%[ ]*block[ ]*([a-zA-Z]*)[ ]*\%\}([a-zA-Zㄱ-힣0-9| \-_"\'\|]*)\{\%[ ]*endblock[ ]*\%\}/m';
+        $re = '/\{\%[ ]*block[ ]*([a-zA-Z]*)[ ]*\%\}(.*)\{\%[ ]*endblock[ ]*\%\}/m';
         $rpl = <<<EOF
 @section('\$1','\$2')
 EOF;
-
         $this->add_rule($re, $rpl);
 
         $re = '/\{\%[ ]*block[ ]*([a-zA-Z]*)[ ]*\%\}/m';
         $rpl = <<<EOF
 @section('\$1')
 EOF;
-
         $this->add_rule($re, $rpl);
 
         $re = '/\{\%[ ]*verbatim[ ]*\%\}/m';
         $rpl = <<<EOF
-@section('verbatim')
+@verbatim
 EOF;
-
         $this->add_rule($re, $rpl);
 
         $re = '/\{\%[ ]*endverbatim[ ]*\%\}/m';
         $rpl = <<<EOF
-@section('endverbatim')
+@endverbatim
 EOF;
-
         $this->add_rule($re, $rpl);
 
         $re = '/\{\%[ ]*endblock[ ]*\%\}/m';
         $rpl = <<<EOF
-@section('endblock')
+@endsection
 EOF;
-
         $this->add_rule($re, $rpl);
 
         $re = '/\{\%[ ]*load[ ]*(\w)+[ ]*\%\}/m';
         $rpl = '';
-
         $this->add_rule($re, $rpl);
 
-        $re = '/\{\%[ ]*if(.*)\%\}/m';
+        $re = '/{\%[ ]*static[ ]*[\'|"]([^%]*)[\'|"][ ]*\%\}/m';
+        $rpl = <<<EOF
+/static/\$1
+EOF;        
+        $this->add_rule($re, $rpl);
+
+        $re = '/\{\%[ ]*if([^%]*)\%\}/m';
         $rpl = <<<EOF
 @if (\$1);
 EOF;
@@ -184,8 +179,15 @@ EOF;
         $rpl = <<<EOF
 @endif;
 EOF;
+        $this->add_rule($re, $rpl);
 
-        $re = '/\{\%[ ]*for(.*)\%\}/m';
+        $re = '/\{\%[ ]*else[ ]*\%\}/m';
+        $rpl = <<<EOF
+@else;
+EOF;
+        $this->add_rule($re, $rpl);
+
+        $re = '/\{\%[ ]*for([^%]*)\%\}/m';
         $rpl = <<<EOF
 @for (\$1);
 EOF;
@@ -196,6 +198,37 @@ EOF;
 @endfor;
 EOF;
         $this->add_rule($re, $rpl);
+
+        $re = '/\{\%[ ]*csrf_token[ ]*\%\}/m';
+        $rpl = <<<EOF
+@csrf;
+EOF;
+        $this->add_rule($re, $rpl);
+
+        $re = '/\{\%[ ]*elif([^%]*)\%\}/m';
+        $rpl = <<<EOF
+@elif (\$1);
+EOF;
+        $this->add_rule($re, $rpl);
+
+        $re = '/{\%[ ]*url[ ]*[\'|"]([^%]*):list[\'|"][ ]*\%\}/m';
+        $rpl = <<<EOF
+{{ route('\$1.index') }}
+EOF;
+        $this->add_rule($re, $rpl);
+
+        $re = '/{\%[ ]*url[ ]*[\'|"]([^%]*)[\'|"][ ]*\%\}/m';
+        $rpl = <<<EOF
+{{ route('\$1') }}
+EOF;
+        $this->add_rule($re, $rpl);
+
+        $re = '/\{\{[ ]*request\.GET\.(\w+)[ ]*\}\}/m';
+        $rpl = <<<EOF
+{{ request()->get('\$1') }}
+EOF;
+        $this->add_rule($re, $rpl);
+
     }
 
     public function add_rule($pattern, $replace)
@@ -298,11 +331,7 @@ EOF;
 
     public function translate()
     {
-        /*  check this
-                var_dump($this->conjugate);
-                var_dump($this->rules);
-                var_dump($this->section_replacer);
-        */
+
         $buffer = '';
         $cnt = 0;
 
@@ -315,6 +344,17 @@ EOF;
             mkdir($resources_path, 0755, true);
         }
 
+        $arr_cp = explode('/',$this->controller_path);
+
+        foreach($arr_cp as $v){
+            $arr_import_path[] = ucfirst($v);
+        }
+
+        $import_path = implode('\\',$arr_import_path);
+
+        $str_imports = '';
+        $str_routes = '';
+
         foreach ($this->conjugate as $module => $modules) {
             $cont = ucfirst($module).'Controller';
             unset($func_content);
@@ -325,7 +365,11 @@ EOF;
                 mkdir($path, 0755, true);
             }
 
+            $cnt_prefix = 0;
+            $max_prefix = count($modules);
+
             foreach ($modules as $prefix => $source) {
+
                 $the_routine = '';
 
                 foreach ($this->routine_mapper as $routine => $mapper) {
@@ -349,45 +393,122 @@ EOF;
                     $the_routine = $this->default_routine;
                 }
 
-                $func_content[] = str_replace('[View]', $prefix, str_replace('[Function]', $prefix, $this->sub_routine[$the_routine]));
+                $the_middleware = '';
+
+                foreach ($this->middleware_mapper as $middleware => $mapper) {
+                    if ($mapper) {
+                        foreach ($mapper as $pattern) {
+                            if (count(explode('/', $pattern)) > 1) {
+                                preg_match_all($pattern, $prefix, $matches, PREG_SET_ORDER, 0);
+                                if (isset($matches[0][0])) {
+                                    $the_middleware = $middleware;
+                                }
+                            } else {
+                                if ($routine == $pattern) {
+                                    $the_middleware = $middleware;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if (!$the_middleware) {
+                    $the_middleware = $this->default_middleware;
+                }
+
+                $func_content[] = str_replace('[View]', $module.'.'.$prefix, str_replace('[Function]', $prefix, $this->sub_routine[$the_routine]));
 
                 $template_source = file_get_contents($source['template_path'], 'r');
+
+                $cnt_rn = count(explode("\r\n",$template_source));
+                $cnt_nn = count(explode("\n",$template_source));
+
+                if($cnt_nn == $cnt_rn){
+                    $line_delimiter = "\r\n";
+                } else {
+                    $line_delimiter = "\n";
+                }
+
+                $lines = explode($line_delimiter,$template_source);
 
                 foreach ($this->rules as $rule) {
                     extract($rule);
 
-                    preg_match_all($pattern, $template_source, $matches, PREG_SET_ORDER, 0);
+                    if($lines){
 
-                    $the_replace = $replace;
-                    $s = [];
-                    for ($i = 5; $i > 0; --$i) {
-                        if (count(explode('$'.$i, $replace)) > 1) {
-                            if (isset($matches[0][$i])) {
-                                $s[$i] = $matches[0][$i];
-                                $the_replace = str_replace('$'.$i, $s[$i], $the_replace);
+                        foreach($lines as $no => $line){
+
+                            preg_match_all($pattern, $line, $matches, PREG_SET_ORDER, 0);
+    
+                            $the_replace = $replace;
+                            $s = [];
+                            for ($i = 5; $i > 0; --$i) {
+                                if (count(explode('$'.$i, $replace)) > 1) {
+                                    if (isset($matches[0][$i])) {
+                                        $s[$i] = $matches[0][$i];
+                                        $the_replace = str_replace('$'.$i, $s[$i], $the_replace);
+                                    }
+                                }
+                            }
+                        
+                            foreach ($this->section_replacer as $src => $rpl) {
+                                $the_replace = str_replace($src, $rpl, $the_replace);
+                            }
+
+                            $lines[$no] = preg_replace($pattern, $the_replace, $line);
+                            
+                        }
+                    // lines    
+                    }
+                // rule loop
+                }
+
+                if($lines) $template_source = implode($line_delimiter,$lines);
+                
+                $module_route = $prefix;
+
+                if($this->route_alias){
+                    foreach($this->route_alias as $arr_alias){
+                        foreach($arr_alias as $alias => $rpl){
+                            if($alias == $prefix){
+                                $module_route = $rpl;
+                            } else if ( count(explode($alias, $prefix)) > 1 ){
+                                $module_route = str_replace($alias,$rpl,$prefix);
                             }
                         }
                     }
-
-                    foreach ($this->section_replacer as $src => $rpl) {
-                        $the_replace = str_replace($src, $rpl, $the_replace);
-                    }
-
-                    $template_source = preg_replace($pattern, $the_replace, $template_source);
                 }
 
-//                echo $path.'/'.$prefix.'.blade.php';
-//                echo "\r\n";
-//                echo strlen($template_source);
-//                echo "\r\n";
+                if($cnt_prefix == 0){
+                    $str_routes .= $line_delimiter."Route::group(['prefix' => '".strtolower($module)."'], function () {".$line_delimiter;
+                }
+
+                $str_routes .= "    Route::get('".strtolower($module_route)."', [".$cont."::class, '".$prefix."'])->name('".strtolower($module).".".strtolower($prefix)."');".$line_delimiter;
+
+                if($cnt_prefix == ($max_prefix-1)){
+                    $str_routes .= '})';
+
+                    if($the_middleware){
+                        $str_routes .= $the_middleware.';'.$line_delimiter;
+                    } else {
+                        $str_routes .= ';'.$line_delimiter;
+                    }
+    
+                }
 
                 $f = fopen($path.'/'.$prefix.'.blade.php', 'w');
                 fwrite($f, '<!-- '.$cont.'::'.$prefix.' -->'."\r\n".$template_source);
                 fclose($f);
                 echo '*';
 
-                //                $js_source = file_get_contents($source['js_path'], 'r');
-            }// prefix loop
+                $cnt_prefix++;
+            // prefix loop
+            }
+
+
+            if( !isset($line_delimiter) ) $line_delimiter = "\n";
+
+            $str_imports .= 'use '.$import_path.'\\'.$cont.';'.$line_delimiter;
 
             $controller_code = implode("\r\n", $func_content);
             $the_controller_code = str_replace('[Functions]', $controller_code, str_replace('[Controller]', $cont, $this->main_routine));
@@ -396,8 +517,20 @@ EOF;
             fwrite($f, $the_controller_code);
             fclose($f);
             echo '#';
-        }// module loop
+        // module loop
+            
+        }
+
+        $this->route_template =str_replace('[Imports]',$str_imports,$this->route_template);
+        $this->route_template =str_replace('[Routers]',$str_routes,$this->route_template);
+
+        $f = fopen($base_path.$this->route_file,'w');
+        fwrite($f, $this->route_template);
+        fclose($f);
+
+    // translate
     }
+
 }
 
 $django_to_laravel = new django_to_laravel();
